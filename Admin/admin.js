@@ -31,7 +31,7 @@ document.addEventListener('DOMContentLoaded', async function() {
             const { data: anuncios, error } = await supabaseClient
                 .from('anuncios')
                 .select('*')
-                .order('dataCriacao', { ascending: false });
+                .order('datacriacao', { ascending: false });
 
             if (error) throw error;
 
@@ -47,14 +47,25 @@ document.addEventListener('DOMContentLoaded', async function() {
                 dias.push(formattedDate);
 
                 const count = anuncios.filter(a => {
-                    const aDate = new Date(a.dataCriacao);
+                    if (!a.datacriacao) return false;
+                    const aDate = new Date(a.datacriacao);
                     return aDate.toDateString() === date.toDateString();
                 }).length;
                 quantidades.push(count);
             }
 
-            const ctx1 = document.getElementById('graficoPorDia').getContext('2d');
-            new Chart(ctx1, {
+            const ctx1 = document.getElementById('graficoPorDia');
+            if (!ctx1) {
+                console.error('Canvas graficoPorDia não encontrado!');
+                return;
+            }
+
+            // Destruir gráfico anterior, se existir e for válido
+            if (window.graficoPorDia && typeof window.graficoPorDia.destroy === 'function') {
+                window.graficoPorDia.destroy();
+            }
+
+            window.graficoPorDia = new Chart(ctx1, {
                 type: 'bar',
                 data: {
                     labels: dias,
@@ -70,7 +81,10 @@ document.addEventListener('DOMContentLoaded', async function() {
                     responsive: true,
                     scales: {
                         y: {
-                            beginAtZero: true
+                            beginAtZero: true,
+                            ticks: {
+                                stepSize: 1
+                            }
                         }
                     }
                 }
@@ -79,6 +93,7 @@ document.addEventListener('DOMContentLoaded', async function() {
             // Gráfico de anúncios por localização
             const localizacoes = {};
             anuncios.forEach(a => {
+                if (!a.localizacao) return;
                 if (!localizacoes[a.localizacao]) {
                     localizacoes[a.localizacao] = 0;
                 }
@@ -88,13 +103,23 @@ document.addEventListener('DOMContentLoaded', async function() {
             const labelsLoc = Object.keys(localizacoes);
             const valuesLoc = Object.values(localizacoes);
 
-            const ctx2 = document.getElementById('graficoPorBairro').getContext('2d');
-            new Chart(ctx2, {
+            const ctx2 = document.getElementById('graficoPorBairro');
+            if (!ctx2) {
+                console.error('Canvas graficoPorBairro não encontrado!');
+                return;
+            }
+
+            // Destruir gráfico anterior, se existir e for válido
+            if (window.graficoPorBairro && typeof window.graficoPorBairro.destroy === 'function') {
+                window.graficoPorBairro.destroy();
+            }
+
+            window.graficoPorBairro = new Chart(ctx2, {
                 type: 'pie',
                 data: {
-                    labels: labelsLoc,
+                    labels: labelsLoc.length > 0 ? labelsLoc : ['Sem dados'],
                     datasets: [{
-                        data: valuesLoc,
+                        data: valuesLoc.length > 0 ? valuesLoc : [1],
                         backgroundColor: [
                             '#ff6384', '#36a2eb', '#ffce56', '#4bc0c0', '#9966ff', '#ff9f43'
                         ],
@@ -118,7 +143,7 @@ document.addEventListener('DOMContentLoaded', async function() {
                 .from('anuncios')
                 .select('*')
                 .eq('status', 'pendente')
-                .order('dataCriacao', { ascending: false });
+                .order('datacriacao', { ascending: false });
 
             if (error) {
                 console.error("Erro ao carregar anúncios:", error.message || JSON.stringify(error));
@@ -143,7 +168,7 @@ document.addEventListener('DOMContentLoaded', async function() {
                                         <p class="card-text mb-1"><strong>Localização:</strong> ${anuncio.localizacao}</p>
                                         <p class="card-text mb-1"><strong>Preço:</strong> ${anuncio.preco.toLocaleString('pt-AO')} Kz</p>
                                         <p class="card-text mb-1"><strong>Contacto:</strong> ${anuncio.contacto}</p>
-                                        <p class="card-text mb-1"><strong>Data:</strong> ${new Date(anuncio.dataCriacao).toLocaleDateString()}</p>
+                                        <p class="card-text mb-1"><strong>Data:</strong> ${new Date(anuncio.datacriacao).toLocaleDateString()}</p>
                                     </div>
                                     <div class="col-md-4 d-flex flex-column gap-2">
                                         <a href="${anuncio.comprovante}" target="_blank" class="btn btn-secondary w-100">Ver Comprovante</a>
@@ -169,8 +194,8 @@ document.addEventListener('DOMContentLoaded', async function() {
             });
 
             // Exportar CSV
-            document.getElementById('btnExportarCSV').addEventListener('click', function() {
-                const { data } = supabaseClient.from('anuncios').select('*');
+            document.getElementById('btnExportarCSV').addEventListener('click', async function() {
+                const { data } = await supabaseClient.from('anuncios').select('*');
                 const csv = convertToCSV(data);
                 downloadCSV(csv, 'anuncios_intermediario_online.csv');
             });
@@ -192,7 +217,7 @@ document.addEventListener('DOMContentLoaded', async function() {
         try {
             await supabaseClient.from('anuncios').update({ status: 'ativo' }).eq('id', id);
             alert('Anúncio aprovado com sucesso!');
-            location.reload();
+            carregarTudo();
         } catch (error) {
             console.error("Erro ao aprovar:", error.message || JSON.stringify(error));
             alert("Erro ao aprovar anúncio.");
@@ -204,7 +229,7 @@ document.addEventListener('DOMContentLoaded', async function() {
         try {
             await supabaseClient.from('anuncios').update({ status: 'rejeitado' }).eq('id', id);
             alert('Anúncio rejeitado.');
-            location.reload();
+            carregarTudo();
         } catch (error) {
             console.error("Erro ao rejeitar:", error.message || JSON.stringify(error));
             alert("Erro ao rejeitar anúncio.");
@@ -213,18 +238,23 @@ document.addEventListener('DOMContentLoaded', async function() {
 
     // Funções auxiliares
     function convertToCSV(objArray) {
-        const array = typeof objArray !== 'object' ? JSON.parse(objArray) : objArray;
+        if (!objArray || !Array.isArray(objArray)) return '';
+
+        const array = Array.isArray(objArray) ? objArray : JSON.parse(objArray);
         let str = 'ID,Título,Descrição,Localização,Preço,Contacto,Status,Data Criação\n';
         for (let i = 0; i < array.length; i++) {
+            const item = array[i];
+            if (!item) continue;
+
             let line = '';
-            line += array[i].id + ',';
-            line += `"${array[i].titulo.replace(/"/g, '""')}",`;
-            line += `"${array[i].descricao.replace(/"/g, '""')}",`;
-            line += `"${array[i].localizacao.replace(/"/g, '""')}",`;
-            line += array[i].preco + ',';
-            line += array[i].contacto + ',';
-            line += array[i].status + ',';
-            line += (array[i].dataCriacao ? new Date(array[i].dataCriacao).toLocaleDateString() : '') + '\n';
+            line += (item.id || '') + ',';
+            line += `"${(item.titulo || '').replace(/"/g, '""')}",`;
+            line += `"${(item.descricao || '').replace(/"/g, '""')}",`;
+            line += `"${(item.localizacao || '').replace(/"/g, '""')}",`;
+            line += (item.preco || '') + ',';
+            line += (item.contacto || '') + ',';
+            line += (item.status || '') + ',';
+            line += (item.datacriacao ? new Date(item.datacriacao).toLocaleDateString() : '') + '\n';
             str += line;
         }
         return str;
@@ -250,4 +280,3 @@ document.addEventListener('DOMContentLoaded', async function() {
         carregarAnunciosAguardando();
         carregarGraficos();
     };
-});
